@@ -18,9 +18,10 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageReference Include="SharpPcap" Version="6.3.1" />
   </ItemGroup>
-  <ItemGroup>
-    <Protobuf Include="Protos\edr_telemetry.proto" GrpcServices="Client" />
-  </ItemGroup>
+	<ItemGroup>
+		<Protobuf Include="Protos\telemetry.proto" GrpcServices="Client" />
+		<Protobuf Include="Protos\advanced_telemetry.proto" GrpcServices="Client" />
+	</ItemGroup>
 
   <!-- Testes e ferramentas de dev não fazem parte do binário do agente -->
   <ItemGroup>

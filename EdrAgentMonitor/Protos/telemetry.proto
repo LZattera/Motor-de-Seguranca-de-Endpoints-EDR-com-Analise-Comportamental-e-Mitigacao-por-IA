@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+option csharp_namespace = "EdrGateway.Protos";
+
+package telemetry;
+
+service TelemetryIngestor {
+  rpc StreamEvents (stream TelemetryEvent) returns (AckReply);
+}
+
+message TelemetryEvent {
+  string agent_id = 1;
+  string severity = 2;
+  string event_type = 3;
+  string process_name = 4;
+  string command_line = 5;
+  string parent_process = 6;
+}
+
+message AckReply {
+  bool success = 1;
+  string message = 2;
+}

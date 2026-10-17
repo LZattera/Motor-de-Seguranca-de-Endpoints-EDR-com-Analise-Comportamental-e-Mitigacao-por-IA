@@ -1,48 +1,85 @@
 ﻿using Microsoft.Diagnostics.Tracing.Parsers;
 using Microsoft.Diagnostics.Tracing.Session;
+using Grpc.Net.Client;
+using EdrGateway.Protos;
+using System.Threading;
 
 namespace EdrAgentMonitor.Infrastructure.Kernel
 {
-    // Fundação do Agente C# para captura de eventos do Kernel
     public class EdrAgentMonitor
     {
         private TraceEventSession? _session;
+        private GrpcChannel? _channel;
+        private global::Grpc.Core.AsyncClientStreamingCall<TelemetryEvent, AckReply>? _call;
+
+        // 1. INICIALIZAÇÃO OBRIGATÓRIA DO SEMÁFORO
+        private static readonly SemaphoreSlim _streamLock = new SemaphoreSlim(1, 1);
 
         public void StartMonitoring()
         {
-            // Cria uma sessão de rastreamento no nível do SO
+            _channel = GrpcChannel.ForAddress("http://localhost:5195");
+            var client = new TelemetryIngestor.TelemetryIngestorClient(_channel);
+            _call = client.StreamEvents();
+
             using (var session = new TraceEventSession("MeuEdrSession"))
             {
                 _session = session;
-
-                // Habilita a escuta de eventos de processos do Kernel
                 session.EnableKernelProvider(KernelTraceEventParser.Keywords.Process);
 
-                // Callback disparado milissegundos após um processo tentar iniciar
-                session.Source.Kernel.ProcessStart += data =>
+                session.Source.Kernel.ProcessStart += async data =>
                 {
                     Console.WriteLine($"[ALERTA] Processo Iniciado: {data.ProcessName} (PID: {data.ProcessID})");
-                    Console.WriteLine($"Caminho: {data.ImageFileName}");
-                    Console.WriteLine($"Linha de Comando: {data.CommandLine}");
 
-                    // Aqui entra a lógica de segurança:
-                    // Se o caminho for suspeito ou não assinado, disparamos a mitigação.
-                    AnalyzeProcessSecurity(data.ProcessID, data.ImageFileName);
+                    try
+                    {
+                        // 2. VERIFICAÇÃO SE A LIGAÇÃO E O FLUXO EXISTEM
+                        if (_call != null && _call.RequestStream != null)
+                        {
+                            await _streamLock.WaitAsync();
+                            try
+                            {
+                                // 3. BLINDAGEM CONTRA VALORES NULOS DO KERNEL
+                                var safeAgentId = Environment.MachineName ?? "AgenteDesconhecido";
+                                var safeProcessName = string.IsNullOrEmpty(data.ProcessName) ? "Desconhecido" : data.ProcessName;
+                                var safeCommandLine = string.IsNullOrEmpty(data.CommandLine) ? "Sem linha de comando" : data.CommandLine;
+                                var safeParentId = data.ParentID.ToString() ?? "0";
+
+                                var evento = new TelemetryEvent
+                                {
+                                    AgentId = safeAgentId,
+                                    Severity = "INFO",
+                                    EventType = "ProcessExecution",
+                                    ProcessName = safeProcessName,
+                                    CommandLine = safeCommandLine,
+                                    ParentProcess = safeParentId
+                                };
+
+                                // 4. ENVIO SEGURO
+                                await _call.RequestStream.WriteAsync(evento);
+                            }
+                            finally
+                            {
+                                _streamLock.Release();
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ERRO gRPC] Falha ao enviar para o Gateway: {ex.Message}");
+                    }
                 };
 
-                // Inicia o bloqueio da thread para escutar os eventos
                 session.Source.Process();
                 _session = null;
             }
         }
 
-        // Interrompe a sessão ETW, liberando a thread bloqueada em Source.Process()
-        public void Stop() => _session?.Stop();
-
-        private void AnalyzeProcessSecurity(int pid, string fileName)
+        public void Stop()
         {
-            // Apenas um log temporário para testes
-            Console.WriteLine($"[ANALISANDO] PID: {pid} | Arquivo: {fileName}");
+            _session?.Stop();
+            // Adicionado ?. para evitar erros ao fechar a aplicação
+            _call?.RequestStream?.CompleteAsync().Wait();
+            _channel?.Dispose();
         }
     }
 }
