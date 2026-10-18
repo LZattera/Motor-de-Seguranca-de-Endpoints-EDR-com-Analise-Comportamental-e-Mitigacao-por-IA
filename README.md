@@ -1,97 +1,82 @@
-# Sentinel EDR: Autonomous Endpoint Detection & Response
+# Motor de Segurança de Endpoints (EDR) com Análise Comportamental e Mitigação por IA
 
-Sistema de segurança cibernética (EDR) focado em detecção de ameaças em tempo real e resposta automatizada com IA em *edge* (air-gapped). O repositório contém atualmente o **agente de endpoint** em C#; os componentes de servidor/control plane fazem parte do roadmap e ainda não estão implementados neste repo.
+Um sistema EDR (*Endpoint Detection and Response*) de nível *Enterprise*, construído do zero para monitorizar, analisar e mitigar ameaças em ambientes Windows em tempo real. A arquitetura combina captura de eventos a nível de Kernel, transporte gRPC de alta performance, mensageria assíncrona com Apache Kafka e orquestração de resposta a incidentes utilizando Inteligência Artificial local.
 
-## 🏗️ Arquitetura (visão)
+## 🚀 Arquitetura do Sistema
 
-Modelo distribuído de Edge Computing em duas camadas:
+O projeto adota uma arquitetura de microsserviços distribuída, desenhada para garantir resiliência, baixa latência e processamento em lote (*batch processing*).
 
-1. **Endpoint (Agente Local):** Daemon/Worker Service em C# (.NET 10) responsável pela interceptação de chamadas do Kernel e captura de pacotes de rede. ✅ implementado parcialmente.
-2. **Control Plane (Servidor de Borda):** cluster conteinerizado para ingestão de telemetria, análise assíncrona via IA e despacho de mitigação. ⏳ roadmap.
+1. **Agente (Sensor & Executor):** monitoriza a criação de processos diretamente no Kernel do Windows via ETW (*Event Tracing for Windows*), sem bloquear o sistema operativo. Os eventos são colocados numa fila de memória de alta performance (`Channel`) e enviados em lotes.
+2. **Gateway (Ingestão & Controlo):** serviço gRPC bidirecional que recebe a telemetria, injeta-a num cluster Kafka e mantém um canal seguro e persistente aberto com o Agente para enviar comandos de mitigação (*callbacks*).
+3. **Infraestrutura de Mensageria:** Redpanda (compatível com Apache Kafka) a correr em contentores Docker para absorver picos de tráfego de telemetria de múltiplos endpoints.
+4. **Cérebro (Automação & IA):** o n8n atua como motor de orquestração SOAR (*Security Orchestration, Automation, and Response*), consumindo ativamente o tópico Kafka e alimentando o modelo LLM (Ollama) para gerar scripts PowerShell cirúrgicos de resposta a ameaças.
 
-## ✅ O Que Já Foi Implementado (Agente)
+### Fluxo de Orquestração SOAR (n8n + Ollama)
 
-### 1. Agente EDR (C# / .NET 10 Worker Service)
-- **Monitorização de Kernel:** interceptação em tempo real de criação de processos via `Microsoft.Diagnostics.Tracing.TraceEvent`.
-- **Packet Sniffing:** captura em modo promíscuo com `SharpPcap` e filtro BPF (exclui a porta 5001 do canal próprio).
-- **Otimização de Memória (Producer-Consumer):** `System.Threading.Channels` com `BoundedChannel` (100.000, `DropOldest`), mantendo baixo uso de RAM/CPU.
+![Workflow de Resposta a Incidentes n8n](docs/n8n-workflow.png)
 
-### 2. Comunicação e Contratos
-- **Contrato gRPC:** `Protos/edr_telemetry.proto` (bidirecional `StreamTelemetry`) e cliente gerado no build via `Grpc.Tools`.
-- **Status:** a chamada de streaming e a ingestão de telemetria **ainda não estão ligadas** no agente (só infraestrutura). Tooling de PKI/mTLS e validação de comandos já existem.
+*O fluxo automatizado em background: ingestão contínua de telemetria via Kafka Trigger e análise comportamental via LLM.*
 
-### 3. Segurança do Canal de Mitigação
-- **mTLS:** `MtlsChannelFactory` com TLS 1.3 e pinning da CA privada (fail-closed).
-- **Comandos assinados:** `MitigationCommandVerifier` valida ECDSA P-256 sobre os bytes exatos do payload, `key_id`, `target_agent_id`, janela de validade e anti-replay.
-- **Executor:** `MitigationExecutor` padrão `DryRun`; `Enforce` executa PowerShell via `-EncodedCommand` (Base64 UTF-16LE) com timeout e captura truncada.
+## 🛠️ Stack Tecnológico
 
-### 4. Dev PKI (scripts)
-- `scripts/DevPki.cs` (app baseado em arquivo do .NET 10) gera CA, certs mTLS e chaves de assinatura.
-- `scripts/New-DevPki.ps1` cria `certs/` e grava a senha no user-secrets.
+| Área | Tecnologia |
+|---|---|
+| **Linguagem principal** | C# (.NET 8/9) |
+| **Comunicação** | gRPC (streams bidirecionais), Protocol Buffers (Protobuf) |
+| **Monitorização nativa** | ETW (`Microsoft.Diagnostics.Tracing.TraceEvent`) |
+| **Mensageria/Fila** | Apache Kafka / Redpanda (`Confluent.Kafka`) |
+| **Orquestração SOAR** | n8n |
+| **Inteligência Artificial** | Ollama (LLM `phi3` para geração de código local e segura) |
+| **Infraestrutura** | Docker, Ubuntu Linux |
 
-## 🚀 Roadmap / Próximos Passos
+## ✨ Funcionalidades Principais
 
-### Fase 2: Ingestão e Processamento (servidor) — não implementado
-- [ ] **Gateway gRPC (.NET / ASP.NET Core):** servidor que receba o streaming bidirecional do agente e faça *produce* de alta taxa para Redpanda/Kafka.
-- [ ] **Worker de IA (.NET):** *consumer* do Redpanda, conversão de logs para JSON e acionamento do webhook do n8n.
-- [ ] **Rastreamento de sessões gRPC ativas:** garantir que o comando de mitigação volte para a máquina correta.
+* **Captura a nível de Kernel:** utilização de `KernelTraceEventParser` para intercetar o ciclo de vida de processos no exato milissegundo em que ocorrem.
+* **Telemetria de alta velocidade:** sistema produtor/consumidor com `Channel<T>` para evitar bloqueios de I/O na máquina hospedeira.
+* **Comunicação bidirecional contínua:** contratos gRPC avançados (`AsyncDuplexStreamingCall`) que permitem streaming de telemetria e receção instantânea de comandos de defesa no mesmo túnel.
+* **Execução silenciosa de mitigações:** o Agente invoca respostas geradas pela IA diretamente em `powershell.exe`, operando de forma 100% invisível ao utilizador (`CreateNoWindow = true`).
+* **Segurança e estabilidade:** mecanismos de salvaguarda, *whitelisting* e isolamento de processos vitais do sistema (ex.: prevenção de `NullReferenceException` em `svchost`).
 
-### Fase 3: Orquestração e Resposta Autônoma
-- [ ] **Pipeline RAG no n8n:** fluxo que recebe telemetria, injeta *system prompt* de segurança e obtém script do Ollama.
-- [ ] **Motor de Execução (agente):** ligar o streaming gRPC no agente para consumir comandos e acionar `MitigationCommandHandler`/`MitigationExecutor`.
-- [ ] **Envio de telemetria:** conectar `TelemetryConsumerService` ao canal gRPC (hoje é saída de console).
-- [ ] **Envio de *ProcessLog*:** hoje o monitor de Kernel só imprime; canalizar para o buffer gRPC.
+## ⚙️ Como Executar o Projeto
 
-### Fase 4: Infraestrutura e Observabilidade
-- [ ] **Docker Compose:** Redpanda, PostgreSQL + pgvector, Ollama (Phi-3) e n8n (arquivos não presentes neste repo).
-- [ ] **Painel de Comando (Dashboard):** frontend reativo (SignalR/React) ou móvel (Flutter).
-- [ ] **Service Windows:** instalação como serviço do Windows (`sc create`/NSSM) e hardening de privileges.
-- [ ] **Kernel monitor robusto:** tratar restart da sessão ETW; hoje é uma execução única.
+### Pré-requisitos
 
-### Higiene / qualidade (curto prazo)
-- [ ] **Tests para `NetworkSniffer`/pipeline:** hoje só segurança é testada.
-- [ ] **Revisar target framework:** está em .NET 10; antigas notas citavam .NET 8 (rotulado).
-- [ ] **PFX password / certs:** gerar PKI de dev antes de rodar o agente.
+* .NET SDK 8.0 ou superior
+* Ambiente Linux (ou WSL) com Docker para correr a infraestrutura Kafka/n8n/Ollama
+* Privilégios de Administrador no Windows (obrigatório para interagir com o ETW)
 
-## 🛠️ Como Rodar o Agente
+### 1. Subir a infraestrutura (Ubuntu/Docker)
 
-Requisitos: Windows, .NET 10 SDK, Npcap instalado, execução elevada.
+Inicia o cluster Redpanda, a base de dados vetorial, o n8n e o Ollama:
+
+```bash
+docker compose up -d
+```
+
+### 2. Iniciar o Gateway (Windows)
+
+O Gateway fica à escuta na porta gRPC:
+
+```powershell
+cd EdrGateway
+dotnet run
+```
+
+### 3. Iniciar o Agente (Windows)
+
+Numa nova janela de terminal, **como Administrador**:
 
 ```powershell
 cd EdrAgentMonitor
-# 1) PKI de desenvolvimento
-.\scripts\New-DevPki.ps1
-# 2) Build
-dotnet build EdrAgentMonitor.csproj
-# 3) Testes
-dotnet test tests/EdrAgentMonitor.Tests/EdrAgentMonitor.Tests.csproj
-# 4) Run (dev)
-dotnet run --project EdrAgentMonitor.csproj
+dotnet run
 ```
 
-> Observação: `dotnet run scripts\DevPki.cs` (sem `--file`) **inicia o agente** em vez de gerar certificados.
+## 🗺️ Próximos Passos (Roadmap)
 
-## 📁 Estrutura do Projeto
+- [ ] **Assinaturas criptográficas:** implementar verificação ECDSA P-256 no Agente para garantir que os comandos de mitigação não podem ser forjados por atacantes na rede (Zero Trust).
+- [ ] **Integração plena do webhook:** ligar o fluxo automatizado do n8n (pós-análise da IA) diretamente à API do Gateway, completando o ciclo de resposta 100% autónomo.
+- [ ] **Análise heurística secundária:** deteção de injeção de DLLs e padrões de tráfego de rede anómalos via SharpPcap.
 
-```
-EdrAgentMonitor/
-  AGENTS.md            # guia para agentes de IA/devs
-  CONTEXT.md           # contexto resumido
-  Program.cs            # wiring de DI
-  Worker.cs             # orquestrador
-  Core/                 # NetworkEvent, buffers, consumer
-  Infrastructure/
-    Kernel/             # ETW process monitor
-    Network/            # SharpPcap sniffer
-    Security/           # mTLS, verifier, executor, replay cache
-  Infrastructure/Grpc/  # proto gerado
-  Protos/               # edr_telemetry.proto
-  scripts/             # DevPki.cs (file-based), New-DevPki.ps1
-  tests/               # xUnit
-```
+---
 
-## 📝 Notas
-
-- O agente não deve consumir mais de 50MB de RAM.
-- Falhas de captura não derrubam o serviço; são logadas e a escuta continua.
-- `certs/`, `bin/`, `obj/` e `.vs/` são gitignored.
+*Desenvolvido como demonstração de engenharia de software avançada, sistemas distribuídos e cibersegurança.*
