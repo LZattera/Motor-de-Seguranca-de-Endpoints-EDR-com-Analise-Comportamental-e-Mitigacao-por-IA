@@ -6,9 +6,9 @@ Um sistema EDR (*Endpoint Detection and Response*) de nível *Enterprise*, const
 
 O projeto adota uma arquitetura de microsserviços distribuída, desenhada para garantir resiliência, baixa latência e processamento em lote (*batch processing*).
 
-1. **Agente (Sensor & Executor):** monitoriza a criação de processos diretamente no Kernel do Windows via ETW (*Event Tracing for Windows*), sem bloquear o sistema operativo. Os eventos são colocados numa fila de memória de alta performance (`Channel`) e enviados em lotes.
+1. **Agente (Sensor & Executor):** monitoriza a criação de processos diretamente no Kernel do Windows via ETW (*Event Tracing for Windows*), sem bloquear o sistema operacional. Os eventos são colocados numa fila de memória de alta performance (`Channel`) e enviados em lotes.
 2. **Gateway (Ingestão & Controlo):** serviço gRPC bidirecional que recebe a telemetria, injeta-a num cluster Kafka e mantém um canal seguro e persistente aberto com o Agente para enviar comandos de mitigação (*callbacks*).
-3. **Infraestrutura de Mensageria:** Redpanda (compatível com Apache Kafka) a correr em contentores Docker para absorver picos de tráfego de telemetria de múltiplos endpoints.
+3. **Infraestrutura de Mensageria:** Redpanda (compatível com Apache Kafka) a correr em conteiners Docker para absorver picos de tráfego de telemetria de múltiplos endpoints.
 4. **Cérebro (Automação & IA):** o n8n atua como motor de orquestração SOAR (*Security Orchestration, Automation, and Response*), consumindo ativamente o tópico Kafka e alimentando o modelo LLM (Ollama) para gerar scripts PowerShell cirúrgicos de resposta a ameaças.
 
 ### Fluxo de Orquestração SOAR (n8n + Ollama)
@@ -33,7 +33,7 @@ O projeto adota uma arquitetura de microsserviços distribuída, desenhada para 
 
 * **Captura a nível de Kernel:** utilização de `KernelTraceEventParser` para intercetar o ciclo de vida de processos no exato milissegundo em que ocorrem.
 * **Telemetria de alta velocidade:** sistema produtor/consumidor com `Channel<T>` para evitar bloqueios de I/O na máquina hospedeira.
-* **Comunicação bidirecional contínua:** contratos gRPC avançados (`AsyncDuplexStreamingCall`) que permitem streaming de telemetria e receção instantânea de comandos de defesa no mesmo túnel.
+* **Comunicação bidirecional contínua:** contratos gRPC avançados (`AsyncDuplexStreamingCall`) que permitem streaming de telemetria e recepção instantânea de comandos de defesa no mesmo túnel.
 * **Execução silenciosa de mitigações:** o Agente invoca respostas geradas pela IA diretamente em `powershell.exe`, operando de forma 100% invisível ao utilizador (`CreateNoWindow = true`).
 * **Segurança e estabilidade:** mecanismos de salvaguarda, *whitelisting* e isolamento de processos vitais do sistema (ex.: prevenção de `NullReferenceException` em `svchost`).
 
