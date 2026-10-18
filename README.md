@@ -76,7 +76,7 @@ dotnet run
 
 ### Saída do Agente (EdrAgentMonitor)
 
-![Saída do EdrAgentMonitor detectando e bloqueando um processo](saidaAgentMonitor.png)
+![Saída do EdrAgentMonitor detectando e bloqueando um processo](saidaAgentMonitor.jfif)
 
 *O Agente rodando no Windows: o evento de Kernel (ETW) detecta a criação do processo `CalculatorApp` (PID 25116) e a mitigação é executada imediatamente com `Stop-Process -Name "CalculatorApp" -Force`, depois que o processo é bloqueado por uma regra rígida do EDR. O erro `wpcap` no início da captura corresponde ao sniffer de rede, que exige o Npcap instalado (veja os pré-requisitos).*
 
