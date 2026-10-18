@@ -39,9 +39,17 @@ namespace EdrAgentMonitor.Infrastructure.Kernel
 
                 session.Source.Kernel.ProcessStart += data =>
                 {
+                    // ---------------------------------------------------------
+                    // BLINDAGEM DE SEGURANÇA: Filtra tudo o que não for a Calculadora
+                    // ---------------------------------------------------------
+                    if (data.ProcessName == null || !data.ProcessName.Contains("CalculatorApp", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return; // Sai imediatamente e ignora o processo
+                    }
+
                     Console.WriteLine($"[KERNEL] Processo detetado: {data.ProcessName} (PID: {data.ProcessID})");
 
-                    var safeProcessName = string.IsNullOrEmpty(data.ProcessName) ? "Desconhecido" : data.ProcessName;
+                    var safeProcessName = data.ProcessName;
                     var safeCommandLine = string.IsNullOrEmpty(data.CommandLine) ? "Sem linha de comando" : data.CommandLine;
 
                     var processLog = new ProcessLog
@@ -54,7 +62,7 @@ namespace EdrAgentMonitor.Infrastructure.Kernel
                         CommandLine = safeCommandLine
                     };
 
-                    // Envia para a fila em memória (não bloqueia a rede nem o kernel)
+                    // Envia para a fila
                     _eventQueue.Writer.TryWrite(processLog);
                 };
 
@@ -98,14 +106,49 @@ namespace EdrAgentMonitor.Infrastructure.Kernel
 
             try
             {
-                // Este loop fica eternamente aberto à espera que o Gateway devolva algo
                 await foreach (var command in _call.ResponseStream.ReadAllAsync())
                 {
+                    // 1. Extrai o payload encriptado que chegou do Gateway
+                    var payload = MitigationPayload.Parser.ParseFrom(command.Payload);
+
                     Console.WriteLine("\n========================================================");
-                    Console.WriteLine("[!!!] COMANDO DE MITIGAÇÃO RECEBIDO DA IA [!!!]");
+                    Console.WriteLine($"[!!!] MITIGAÇÃO ATIVADA | Motivo: {payload.Reason}");
+                    Console.WriteLine($"[!!!] Executando: {payload.PowershellScript}");
                     Console.WriteLine("========================================================\n");
 
-                    // Na Fase 3, vamos desencriptar e executar o payload que chega aqui!
+                    // Substitui aspas duplas do script por plicas simples para não quebrar o -Command
+                    var safeScript = payload.PowershellScript.Replace("\"", "'");
+
+                    // 2. O Carrasco: Executa o comando PowerShell real de forma invisível
+                    var startInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "powershell.exe",
+                        Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command {safeScript}",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true // Não pisca ecrãs no utilizador
+                    };
+
+                    using var proc = System.Diagnostics.Process.Start(startInfo);
+
+                    // 3. LÊ OS GRITOS DO POWERSHELL (Se houver erros, nós vamos ver!)
+                    if (proc != null)
+                    {
+                        string error = await proc.StandardError.ReadToEndAsync();
+                        string output = await proc.StandardOutput.ReadToEndAsync();
+
+                        proc.WaitForExit();
+
+                        if (!string.IsNullOrWhiteSpace(error))
+                        {
+                            Console.WriteLine($"[FALHA NA EXECUÇÃO]: {error.Trim()}");
+                        }
+                        else if (!string.IsNullOrWhiteSpace(output))
+                        {
+                            Console.WriteLine($"[SUCESSO]: {output.Trim()}");
+                        }
+                    }
                 }
             }
             catch (Exception ex)

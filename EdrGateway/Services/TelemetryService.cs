@@ -1,11 +1,11 @@
 ﻿using Grpc.Core;
 using Confluent.Kafka;
 using System.Text.Json;
-using EdrAgentMonitor.Infrastructure.Grpc; // O namespace definido no seu proto avançado
+using Google.Protobuf; // Necessário para o ToByteString e ByteString
+using EdrAgentMonitor.Infrastructure.Grpc;
 
 namespace EdrGateway.Services;
 
-// Agora herdamos do EdrTelemetryService (do contrato avançado)
 public class AdvancedTelemetryService : EdrTelemetryService.EdrTelemetryServiceBase
 {
     private readonly ILogger<AdvancedTelemetryService> _logger;
@@ -23,17 +23,16 @@ public class AdvancedTelemetryService : EdrTelemetryService.EdrTelemetryServiceB
         IServerStreamWriter<MitigationCommand> responseStream,
         ServerCallContext context)
     {
-        _logger.LogInformation("[GATEWAY] Nova ligação bidirecional encriptada estabelecida com um Agente.");
+        _logger.LogInformation("[GATEWAY] Nova ligação bidirecional estabelecida com um Agente.");
 
-        // Loop contínuo para ler os lotes de telemetria à medida que chegam
         await foreach (var batch in requestStream.ReadAllAsync())
         {
-            // O batch pode conter dezenas de processos. Vamos iterar sobre eles:
             foreach (var process in batch.ProcessLogs)
             {
-                _logger.LogWarning($"[GATEWAY] Processo do lote {batch.BatchSequence} recebido de {batch.Hostname}: {process.ProcessName}");
+                _logger.LogWarning($"[GATEWAY] Processo detetado: {process.ProcessName}");
 
-                var payload = JsonSerializer.Serialize(new
+                // 1. REGISTAR NO N8N (KAFKA)
+                var kafkaPayload = JsonSerializer.Serialize(new
                 {
                     agent_id = batch.AgentId,
                     severity = "INFO",
@@ -46,8 +45,30 @@ public class AdvancedTelemetryService : EdrTelemetryService.EdrTelemetryServiceB
                     }
                 });
 
-                // Envia para o Redpanda (Ubuntu)
-                await _kafkaProducer.ProduceAsync("edr-telemetry", new Message<Null, string> { Value = payload });
+                await _kafkaProducer.ProduceAsync("edr-telemetry", new Message<Null, string> { Value = kafkaPayload });
+
+                // 2. DISPARAR MITIGAÇÃO (CALCULADORA)
+                if (process.ProcessName.Contains("CalculatorApp", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogCritical($"[GATEWAY] AMEAÇA DETETADA: {process.ProcessName}. A emitir ordem de mitigação...");
+
+                    var payloadObj = new MitigationPayload
+                    {
+                        CommandId = Guid.NewGuid().ToString(),
+                        TargetAgentId = batch.AgentId,
+                        PowershellScript = $"Stop-Process -Name \"{process.ProcessName}\" -Force",
+                        Reason = "Processo bloqueado por regra rígida do EDR."
+                    };
+
+                    var command = new MitigationCommand
+                    {
+                        Payload = payloadObj.ToByteString(),
+                        Signature = ByteString.CopyFromUtf8("ASSINATURA_ECDSA_SIMULADA"),
+                        KeyId = "chave-publica-01"
+                    };
+
+                    await responseStream.WriteAsync(command);
+                }
             }
         }
     }
