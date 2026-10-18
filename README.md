@@ -13,9 +13,9 @@ O projeto adota uma arquitetura de microsserviços distribuída, desenhada para 
 
 ### Fluxo de Orquestração SOAR (n8n + Ollama)
 
-![Workflow de Resposta a Incidentes n8n](docs/n8n-workflow.png)
+![Workflow n8n: Kafka Trigger → Message a model (Ollama)](docs/n8n-workflow.png)
 
-*O fluxo automatizado em background: ingestão contínua de telemetria via Kafka Trigger e análise comportamental via LLM.*
+*Fluxo atual no n8n: o **Kafka Trigger** consome continuamente a telemetria do tópico e encaminha cada evento para o nó **Message a model** (Ollama), que faz a análise comportamental e gera a resposta de mitigação. O retorno ao Gateway via webhook ainda está no roadmap.*
 
 ## 🛠️ Stack Tecnológico
 
@@ -44,6 +44,7 @@ O projeto adota uma arquitetura de microsserviços distribuída, desenhada para 
 * .NET SDK 8.0 ou superior
 * Ambiente Linux (ou WSL) com Docker para correr a infraestrutura Kafka/n8n/Ollama
 * Privilégios de Administrador no Windows (obrigatório para interagir com o ETW)
+* [Npcap](https://npcap.com) instalado no Windows (necessário para o sniffer de rede via SharpPcap; sem ele o Agente mostra `DllNotFoundException: wpcap`)
 
 ### 1. Subir a infraestrutura (Ubuntu/Docker)
 
@@ -70,6 +71,12 @@ Numa nova janela de terminal, **como Administrador**:
 cd EdrAgentMonitor
 dotnet run
 ```
+
+### Saída do Agente (EdrAgentMonitor)
+
+![Saída do EdrAgentMonitor detetando e bloqueando um processo](saidaAgentMonitor.png)
+
+*O Agente a correr no Windows: o evento de Kernel (ETW) deteta a criação do processo `CalculatorApp` (PID 25116) e a mitigação é executada de imediato com `Stop-Process -Name "CalculatorApp" -Force`, após o processo ser bloqueado por uma regra rígida do EDR. O erro `wpcap` no início da captura corresponde ao sniffer de rede, que exige o Npcap instalado (ver pré-requisitos).*
 
 ## 🗺️ Próximos Passos (Roadmap)
 
